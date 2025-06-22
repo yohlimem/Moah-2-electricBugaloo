@@ -40,8 +40,8 @@ fn model(app: &App) -> Model {
     let window_id = app.new_window().view(view).raw_event(raw_window_event).build().unwrap();
     let window = app.window(window_id).unwrap();
     let egui = Egui::from_window(&window);
-    let chain_length = 3;
-    let link_length = 40.0;
+    let chain_length = 4;
+    let link_length = 30.0;
     Model {
         egui,
         chain_length,
