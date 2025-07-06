@@ -13,6 +13,7 @@ struct Model {
     speed: u32,
     chain: Vec<Node>,
     debug: bool,
+    start_energy: f32,
 }
 
 fn main() {
@@ -23,13 +24,13 @@ fn main() {
 fn generate_chain(length: usize, link_rad: f32, mass: f32) -> Vec<Node>{
     let mut nodes = Vec::with_capacity(length);
     nodes.push(Node::new(PI/2.0, link_rad, mass));
-    nodes[0].step(0.00001, &None, &None);
+    nodes[0].anglular_acceleration = nodes[0].acceleration_function(&None, &None);
     for i in 1..length {
-        nodes.push(Node::new(random_f32().abs() * 0.01*PI + PI/2.0, link_rad, mass));
+        nodes.push(Node::new((random_f32() - 0.5)*2.0 * 0.2*PI + PI/2.0, link_rad, mass));
 
 
         let last_node = Some(nodes[i-1].clone());
-        nodes[i].step(0.00001, &last_node, &None);
+        nodes[1].anglular_acceleration = nodes[i].acceleration_function(&last_node, &None);
 
     }
     return nodes;
@@ -40,40 +41,41 @@ fn model(app: &App) -> Model {
     let window_id = app.new_window().view(view).raw_event(raw_window_event).build().unwrap();
     let window = app.window(window_id).unwrap();
     let egui = Egui::from_window(&window);
-    let chain_length = 4;
+    let chain_length = 5;
     let link_length = 30.0;
-    Model {
+    let start_chain = generate_chain(chain_length, link_length, 1.0);
+    let mut model = Model {
         egui,
         chain_length,
-        chain: generate_chain(chain_length, link_length, 1.0),
+        start_energy: 0.0,
+        chain: start_chain,
         speed: 1,
         link_length,
         debug: true,
-    }
+    };
+    
+    // for _ in 0..30{
+    //     step_all_no_energy(&mut model.chain,  model.start_energy, 0.0001);
+    // }
+    // model.start_energy = calculate_total_elastic_energy(&model.chain) + calculate_total_angular_kinetic_energy(&model.chain) + calculate_total_water_kinetic_energy(&model.chain);
+    // println!("{}", model.start_energy );
+    return model;
 }
 
 
 
 fn update(app: &App, model: &mut Model, update: Update) {
     // println!("{}", (app.mouse.position().y).atan2(app.mouse.position().x).rad_to_deg());
-    render_egui(&mut model.egui, &mut model.chain_length, &mut model.link_length, &mut model.speed, &mut model.debug, &mut model.chain);
-    let dt = 0.0001;
+    render_egui(&mut model.egui, &mut model.chain_length, &mut model.link_length, &mut model.speed, &mut model.debug, &mut model.chain, &mut model.start_energy);
+    let dt = 0.001;
     // println!("{:?}", &model.chain[9]);
-    for _ in 0..model.speed*10{
-        let clone_chain = model.chain.clone();
-        
-        for node in 1..model.chain_length - 1{
-            let last_node = Some(clone_chain[node-1].clone());
-            let next_node = Some(clone_chain[node+1].clone());
-            model.chain[node].step(dt, &last_node, &next_node);
-        }
-
-        let last_node = Some(clone_chain[model.chain_length - 2].clone());
-        model.chain.last_mut().unwrap().step(dt, &last_node, &None);
-
+    for _ in 0..model.speed{
+        model.chain = step_all(model.chain.clone(), model.start_energy, dt);
     }
+    // println!("new_energy: {}, elastic_energy: {}, kinetic_energy: {}", calculate_total_elastic_energy(&model.chain) + calculate_total_water_kinetic_energy(&model.chain) + calculate_total_angular_kinetic_energy(&model.chain), calculate_total_elastic_energy(&model.chain), calculate_total_angular_kinetic_energy(&model.chain));
+    // println!("{}", (model.start_energy / (calculate_total_elastic_energy(&model.chain) + calculate_total_water_kinetic_energy(&model.chain) + calculate_total_angular_kinetic_energy(&model.chain))));
 }
-fn render_egui(egui: &mut Egui, chain_length: &mut usize, link_length: &mut f32, speed: &mut u32, debug: &mut bool, chain: &mut Vec<Node>){
+fn render_egui(egui: &mut Egui, chain_length: &mut usize, link_length: &mut f32, speed: &mut u32, debug: &mut bool, chain: &mut Vec<Node>, start_energy: &mut f32){
     let egui = egui;
     // egui.set_elapsed_time(update.since_start);
 
@@ -92,6 +94,10 @@ fn render_egui(egui: &mut Egui, chain_length: &mut usize, link_length: &mut f32,
 
         if chain_length_slider.changed() || link_length_slider.changed() || reset.clicked() {
             *chain = generate_chain(*chain_length, *link_length, 1.0);
+        //     for _ in 0..30{
+        //         step_all_no_energy(chain, *start_energy, 0.001);
+        //     }
+        //     *start_energy = calculate_total_elastic_energy(&chain) + calculate_total_angular_kinetic_energy(&chain) + calculate_total_water_kinetic_energy(&chain);
         }
     });
     
@@ -141,14 +147,45 @@ fn view(app: &App, model: &Model, frame: Frame) {
     model.egui.draw_to_frame(&frame).unwrap();
     
 }
-fn captured_frame_path(app: &App, frame: &Frame) -> std::path::PathBuf {
-    // Create a path that we want to save this frame to.
-    app.project_path()
-        .expect("failed to locate `project_path`")
-        // Capture all frames to a directory called `/<path_to_nannou>/nannou/simple_capture`.
-        .join(app.exe_name().unwrap())
-        // Name each file after the number of the frame.
-        .join(format!("{:03}", frame.nth()))
-        // The extension will be PNG. We also support tiff, bmp, gif, jpeg, webp and some others.
-        .with_extension("png")
+
+fn calculate_total_elastic_energy(chain: &Vec<Node>) -> f32{
+    let mut sum = 0.0;
+    for link in chain.windows(2) {
+        sum += (link[0].angle - link[1].angle).sin()*(link[0].angle - link[1].angle).sin()*100.0/(2.0);
+    }
+    return sum;
+}
+
+fn calculate_total_angular_kinetic_energy(chain: &Vec<Node>) -> f32{
+    let mut sum = 0.0;
+    for link in chain {
+        sum += link.anglular_velocity*link.anglular_velocity*(link.mass*link.radius*link.radius*(1.0/12.0))/2.0;    
+    }
+    return sum;
+    
+}
+fn calculate_total_water_kinetic_energy(chain: &Vec<Node>) -> f32{
+    return Node::LIQUID_SPEED*Node::LIQUID_SPEED*(Node::LIQUID_DENSITY*Node::LIQUID_SPEED*0.01*0.01)/2.0 * chain.len() as f32; // V^2 * (density*speed*dt*surface_area_of_the_pipe_hole)/2
+    // let mut sum = 0.0;
+    // for link in chain.windows(2) {
+    //     sum += Node::LIQUID_DENSITY*Node::LIQUID_SPEED*Node::LIQUID_SPEED *0.01*(vec2(-link[1].angle.sin(), link[1].angle.cos()) - vec2(-link[0].angle.sin(), link[0].angle.cos())).normalize_or_zero();
+    // }
+    // return 
+}
+
+pub fn step_all(chain: Vec<Node>, start_energy: f32, dt: f32) -> Vec<Node>{
+    let mut chain = chain;
+    let clone_chain = chain.clone();
+    let new_energy = calculate_total_elastic_energy(&clone_chain) + calculate_total_water_kinetic_energy(&clone_chain)+calculate_total_angular_kinetic_energy(&clone_chain);
+    for node in 1..chain.len() - 1{
+        let last_node = Some(clone_chain[node-1].clone());
+        let next_node = Some(clone_chain[node+1].clone());
+        chain[node].anglular_acceleration = chain[node].acceleration_function(&last_node, &next_node);
+        chain[node].solver(dt, &last_node, &next_node);
+    }
+    
+    let last_node = Some(clone_chain[chain.len() - 2].clone());
+    chain.last_mut().unwrap().anglular_acceleration = chain.last_mut().unwrap().acceleration_function(&last_node, &None);
+    chain.last_mut().unwrap().solver(dt, &last_node, &None);
+    return chain;
 }
